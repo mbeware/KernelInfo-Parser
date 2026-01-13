@@ -6,7 +6,7 @@ FROM python:3.11-slim
 
 # Argument to specify the version/branch/tag to pull from GitHub
 # Defaults to main branch
-ARG KERNELINFO-PARSER_VERSION=main
+ARG KERNELINFO_PARSER_VERSION=main
 
 # MySQL connection configuration (for host database)
 # Use host.docker.internal to connect to MySQL running on the host
@@ -19,7 +19,7 @@ ARG MYSQL_DATABASE=test
 # Image metadata
 LABEL maintainer="mbeware"
 LABEL description="Install kernel tool from Maple-Circuit"
-LABEL version="${KERNELINFO-PARSER_VERSION}"
+LABEL version="${KERNELINFO_PARSER_VERSION}"
 
 # Environment variables
 ENV PYTHONUNBUFFERED=1
@@ -46,7 +46,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 # Clone KernelInfo-Parser repository from GitHub with specified version
-RUN git clone --branch ${KERNELINFO-PARSER_VERSION} --depth 1 \
+RUN git clone --branch ${KERNELINFO_PARSER_VERSION} --depth 1 \
     https://github.com/MapleCircuit/KernelInfo-Parser.git /app
 
 # Create directory for Linux kernel source (to be mounted as volume)
@@ -65,7 +65,7 @@ VOLUME ["/app/linux"]
 ENTRYPOINT ["python", "main.py"]
 
 # Usage:
-# Build: docker build --build-arg KERNELINFO-PARSER_VERSION=main -t KernelInfo-Parser .
+# Build: docker build --build-arg KERNELINFO_PARSER_VERSION=main -t kernelinfo-parser .
 # Run:   docker run --add-host=host.docker.internal:host-gateway \
 #          -v ~/Downloads/linux-kernel:/app/linux \
-#          KernelInfo-Parser
+#          kernelinfo-parser
