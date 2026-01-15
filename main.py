@@ -1,4 +1,4 @@
-from collections import namedtuple, deque
+from collections import namedtuple
 import mysql.connector
 from operator import itemgetter
 import subprocess as sp
@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import pickle
 import multiprocessing
-import clang.cindex
+import clang.cindex as cc
 import ctypes
 import os
 import argparse
@@ -41,7 +41,7 @@ class _MyBreak(Exception): pass
 
 
 class CXSourceRangeList(ctypes.Structure):
-	_fields_ = [("count", ctypes.c_uint),("ranges", ctypes.POINTER(clang.cindex.SourceRange))]
+	_fields_ = [("count", ctypes.c_uint),("ranges", ctypes.POINTER(cc.SourceRange))]
 
 CXSourceRangeList_P = ctypes.POINTER(CXSourceRangeList)
 
@@ -58,7 +58,7 @@ class Line:
 	def __init__(self, *args):
 		match len(args):
 			case 1:
-				if isinstance(args[0], clang.cindex.SourceRange):
+				if isinstance(args[0], cc.SourceRange):
 					self.line_pos = (args[0].start.line, args[0].end.line)
 					self.char_pos = (args[0].start.column, args[0].end.column)
 				else:
@@ -188,6 +188,12 @@ class Ast_STRUCT_DECL(Ast):
 		self.name = name
 		self.children = children
 
+class Ast_FUNCTION_DECL(Ast):
+	def __init__(self, line, name, ast_type):
+		self.line = line
+		self.name = name
+		self.ast_type = ast_type
+
 class Ast_Struct_FIELD_DECL(Ast):
 	def __init__(self, line, name, ast_type):
 		self.line = line
@@ -216,6 +222,8 @@ class Ast_Type():
 		# Ast_Type_Function
 		self.func_type = None
 		self.func_args = []
+		self.func_args_name = []
+
 		# Ast_Type_Pure, Ast_Type_Typedef, Ast_Type_Struct, Ast_Type_Function
 		self.type_name = None
 		self.location_file = None
@@ -546,7 +554,7 @@ class Great_Processor:
 		global multi_proc
 		multi_proc = False
 		for CS in self.main_dict.values():
-			x = []
+			x = [] # ruff F841 : unused will we need it? if not, no soup for you!
 			for item in CS.cs:
 				while item.__class__.__name__ == "Delayed_Executor":
 					item = item.process(CS.cs_result)
@@ -649,11 +657,11 @@ class Great_Processor:
 			sql_drop_print += f"`{table.table_name}`, "
 			sql_drop += f"`{table.table_name}`, "
 		print(sql_drop_print[:-2])
-		for x in range(3):
+		for _ in range(3): # ruff F841 we don't use the variable, so we dont need one. 
 			try:
 				execdb(db, sql_drop[:-2])
-			except Exception as e:
-				print("drop failed")
+			except Exception as e: 
+				print(f"drop failed : exception : {e}") 
 		unset_db(db)
 		return
 
@@ -757,7 +765,7 @@ class Table:
 		self.columns = tuple(temp_arr)
 
 		temp_arr_primary = []
-		temp_sql += f" PRIMARY KEY ("
+		temp_sql += " PRIMARY KEY (" 
 		for keys in self.init_primary:
 			temp_sql += f"{keys},"
 			temp_arr_primary.append(temp_arr.index(keys))
@@ -855,7 +863,7 @@ class Table:
 			if key_group in self.optimized_table:
 				if self.get_list:
 					get_array = []
-					if (keys := self.optimized_table[key_group].get(values)):
+					if (keys := self.optimized_table[key_group].get(values)): # ruff F841 : we dont use keys, we could not assign it
 						for key in self.optimized_table[key_group].get(values):
 							if (query_result := self.current_table.get(key)):
 								get_array.append(query_result)
@@ -1072,7 +1080,7 @@ class Master_File:
 						case _:
 							if not CLEAN_PRINT:
 								print(f"Unrecognised include: {item}")
-				except:
+				except Exception:
 					print(f"Unrecognised include causing an error: {item}")
 			for item in filter(str.strip, temp_arr):
 				path_arr = []
@@ -1294,42 +1302,50 @@ class Ast_Manager():
 	def ast_parse_function(self, c_children, ast_t=None):
 		if ast_t is None:
 			ast_t = Ast_Type()
+		ast_t.type_style = Ast_Type_Function
 
 		for kids in c_children.get_children():
+			if kids.kind == cc.CursorKind.COMPOUND_STMT:
+				continue
 			if f"{kids.kind}" == "CursorKind.TYPE_REF":
 				ast_t.func_type = self.ast_type_getter(kids)
 				continue
 			ast_t.func_args.append(self.ast_type_getter(kids))
-
+			if kids.spelling != "":
+				ast_t.func_args_name.append(kids.spelling)
 		return ast_t
 
 	def ast_type_getter(self, c_children, ast_t=None):
 		if ast_t is None:
 			ast_t = Ast_Type()
 
-		# START POINTER HANDLING
-		if f"{c_children.type.kind}" == "TypeKind.POINTER":
-			c_children_type = c_children.type.get_pointee()
-			ast_t.pointer = True
+		c_children_type = c_children.type
 
-			if c_children.type.is_const_qualified():
-				ast_t.pointer_const = True
-		else:
-			c_children_type = c_children.type
-		# END POINTER HANDLING
+		while ((c_children_type.kind == cc.TypeKind.ELABORATED) or (c_children_type.kind == cc.TypeKind.POINTER)):
+			# START POINTER HANDLING
+			if c_children_type.kind == cc.TypeKind.POINTER:
+				c_children_type = c_children_type.get_pointee()
+				ast_t.pointer = True
+
+				if c_children_type.is_const_qualified():
+					ast_t.pointer_const = True
+			# END POINTER HANDLING
+
+			if c_children_type.kind == cc.TypeKind.ELABORATED:
+				c_children_type = c_children_type.get_named_type()
 
 		if c_children_type.is_const_qualified():
 			ast_t.const = True
 
-		match f"{c_children_type.kind}":
-			case "TypeKind.FUNCTIONPROTO":
-				############### THIS IS FUCKED Ast_Type_Function
+		print(f"{c_children_type.kind}")
+		match c_children_type.kind:
+			case cc.TypeKind.FUNCTIONPROTO:
 				ast_t.type_style = Ast_Type_Function
 				ast_t = self.ast_parse_function(c_children, ast_t)
-			case "TypeKind.RECORD":
+			case cc.TypeKind.RECORD:
 				#struct and union, this shit will break....
 				ast_t.type_style = Ast_Type_Struct
-			case "TypeKind.ELABORATED":
+			case cc.TypeKind.TYPEDEF:
 				ast_t.type_style = Ast_Type_Typedef
 			case _:
 				ast_t.type_style = Ast_Type_Pure
@@ -1369,19 +1385,18 @@ class Ast_Manager():
 			print(f"   {member_decl.kind}---{member_decl.spelling}---{member_decl_type.get_declaration().spelling}")
 
 
-			if "STRUCT_DECL" == f"{member_decl.kind}"[11:]:
+			if cc.CursorKind.STRUCT_DECL == member_decl.kind:
 				children.append(Ast_Struct_STRUCT_DECL(
 					Line(member_decl.extent),
 					member_decl.spelling,
 					ast_t
 				))
-			elif "FIELD_DECL" == f"{member_decl.kind}"[11:]:
+			elif cc.CursorKind.FIELD_DECL == member_decl.kind:
 				children.append(Ast_Struct_FIELD_DECL(
 					Line(member_decl.extent),
 					member_decl.spelling,
 					ast_t
 				))
-			#children.append(Ast_Struct_FIELD_DECL())
 
 		if not children:
 			children = None
@@ -1394,16 +1409,18 @@ class Ast_Manager():
 
 
 	def ast_parse_function_decl(self, c_children):
-		#######LIST EVERYTHING AND GET THE KIDS AND PRINT SOMETHING TO UNDERSTAND WHAT ISGOING ONNNNNN
-		return self.ast_parse_function(c_children)
+		return Ast_FUNCTION_DECL(Line(c_children.extent),
+			c_children.spelling,
+			self.ast_parse_function(c_children)
+		)
 
 
 	def ast_parse(self, c_children):
 		print(f"{c_children.kind}---{c_children.spelling}")
-		match f"{c_children.kind}"[11:]:
-			case "STRUCT_DECL":
+		match c_children.kind:
+			case cc.CursorKind.STRUCT_DECL:
 				return self.ast_parse_struct_decl(c_children)
-			case "FUNCTION_DECL":
+			case cc.CursorKind.FUNCTION_DECL:
 				return self.ast_parse_function_decl(c_children)
 
 
@@ -1430,7 +1447,7 @@ class Ast_Manager():
 				cppro_cindex_input.append(f"-D{ifdefs.identifier}")
 
 		# Initialize the Clang index
-		index = clang.cindex.Index.create()
+		index = cc.Index.create()
 
 		translation_unit = index.parse(f"{mf.version_dict[version]}/{file_path}", args=[
 			"-D__KERNEL__",*cppro_cindex_input,#"-nostdinc",
@@ -1438,12 +1455,12 @@ class Ast_Manager():
 			f"-I{mf.version_dict[version]}/include",
 			f"-I{mf.version_dict[version]}/include/uapi"
 		],
-		options=clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD)
+		options=cc.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD)
 
 		#######################################################################
-		clang.cindex.conf.lib.clang_getSkippedRanges.restype = CXSourceRangeList_P#
+		cc.conf.lib.clang_getSkippedRanges.restype = CXSourceRangeList_P#
 		#######################################################################
-		Skipped_ranges = clang.cindex.conf.lib.clang_getSkippedRanges(
+		Skipped_ranges = cc.conf.lib.clang_getSkippedRanges(
 			translation_unit,
 			translation_unit.get_file(f"{mf.version_dict[version]}/{file_path}")
 		)
